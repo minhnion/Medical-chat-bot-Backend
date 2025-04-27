@@ -1,0 +1,18 @@
+#backend
+/backend/node_modules
+package-lock.json
+.env
+.node_modules
+backend/tmp/
+
+#python
+python/venv/
+tmp/
+__pycache__/
+*.py[cod]
+python/notebooks/*.ipynb_checkpoints/
+python/services/__pycache__/
+
+# FAISS index files
+indexes/
+*.idx
