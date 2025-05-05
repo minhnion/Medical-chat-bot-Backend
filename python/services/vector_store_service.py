@@ -14,29 +14,26 @@ from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 import logging
-from urllib.parse import urlparse # Thêm thư viện này
+from urllib.parse import urlparse
 
-# Cấu hình logging
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Tải biến môi trường từ file .env ở thư mục gốc
+# .env file path
 dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', 'backend/.env')
 load_dotenv(dotenv_path=dotenv_path)
 
-# --- Cấu hình ---
+# config
 MONGO_URI = os.getenv("MONGODB_URI")
 if not MONGO_URI:
     logging.error("MONGODB_URI không được đặt trong file .env!")
     raise ValueError("Thiếu MONGODB_URI")
 
-# Cố gắng lấy tên DB từ URI
 parsed_uri = urlparse(MONGO_URI)
 db_name_from_uri = parsed_uri.path.strip('/') if parsed_uri.path else None
 
-# Lấy DB_NAME từ .env (cho phép ghi đè hoặc cung cấp nếu URI không có)
 db_name_from_env = os.getenv("DB_NAME")
 
-# Xác định tên database cuối cùng sẽ sử dụng
 FINAL_DB_NAME = None
 if db_name_from_env:
     FINAL_DB_NAME = db_name_from_env
@@ -48,34 +45,28 @@ else:
     logging.error("Không thể xác định tên database. Vui lòng đặt DB_NAME trong .env hoặc đảm bảo MONGODB_URI chứa tên DB (ví dụ: ...mongodb.net/your_db_name).")
     raise ValueError("Không thể xác định tên database")
 
-COLLECTION_NAME = "conversations" # Tên collection của bạn
+COLLECTION_NAME = "conversations"
 EMBEDDING_MODEL = 'all-MiniLM-L6-v2'
 INDEX_PATH = os.path.join(os.path.dirname(__file__), '..', 'vector_store', 'faiss_index.bin')
 MAPPING_PATH = os.path.join(os.path.dirname(__file__), '..', 'vector_store', 'id_mapping.pkl')
 
 os.makedirs(os.path.dirname(INDEX_PATH), exist_ok=True)
-# --- Kết thúc Cấu hình ---
 
 
 class VectorStoreService:
-    # Sử dụng các giá trị cấu hình đã xác định ở trên làm mặc định
     def __init__(self, mongo_uri=MONGO_URI, db_name=FINAL_DB_NAME, collection_name=COLLECTION_NAME, model_name=EMBEDDING_MODEL):
-        """Khởi tạo service với thông tin kết nối và model."""
         logging.info("Khởi tạo VectorStoreService...")
+        
         self.mongo_uri = mongo_uri
-        self.db_name = db_name # Sử dụng tên DB đã được xác định
+        self.db_name = db_name 
         self.collection_name = collection_name
         try:
             self.client = MongoClient(self.mongo_uri)
-            # Truy cập database bằng tên đã xác định
-            # Ngay cả khi URI có tên DB, việc truy cập client[self.db_name]
-            # đảm bảo bạn đang làm việc với đúng database mong muốn.
             self.db = self.client[self.db_name]
             self.collection = self.db[self.collection_name]
             logging.info(f"Kết nối thành công tới MongoDB: DB='{self.db_name}', Collection='{self.collection_name}'")
         except Exception as e:
             logging.error(f"Lỗi kết nối MongoDB: {e}")
-            # Thêm chi tiết lỗi kết nối có thể hữu ích
             if "query timed out" in str(e).lower():
                 logging.error("Lỗi timeout - kiểm tra cấu hình mạng/firewall tới MongoDB Atlas.")
             elif "authentication failed" in str(e).lower():
@@ -94,7 +85,6 @@ class VectorStoreService:
     def _fetch_data(self):
         logging.info(f"Đang lấy dữ liệu từ collection '{self.collection_name}'...")
         try:
-            # Lấy cả Description và Doctor
             documents = list(self.collection.find({}, {"_id": 1, "Description": 1, "Doctor": 1}))
             if not documents:
                 logging.warning("Không tìm thấy tài liệu nào.")
@@ -103,24 +93,18 @@ class VectorStoreService:
             ids = [str(doc["_id"]) for doc in documents]
             texts_to_embed = []
             for doc in documents:
-                # Lấy nội dung, dùng chuỗi rỗng nếu thiếu
                 question = doc.get("Description", "")
                 answer = doc.get("Doctor", "")
-                # Kết hợp thành một chuỗi duy nhất để embed
-                # Bạn có thể thử nghiệm cách kết hợp khác nhau
                 combined_text = f"Câu hỏi: {question}\nTrả lời: {answer}"
-                # Hoặc chỉ embed câu trả lời:
-                # combined_text = answer if answer else question # Ưu tiên trả lời, nếu không có thì dùng câu hỏi
                 texts_to_embed.append(combined_text)
 
             logging.info(f"Đã chuẩn bị {len(texts_to_embed)} đoạn text để embed.")
-            return ids, texts_to_embed # Trả về list các đoạn text đã kết hợp
+            return ids, texts_to_embed 
         except Exception as e:
             logging.error(f"Lỗi khi truy vấn hoặc chuẩn bị dữ liệu MongoDB: {e}")
             return [], []
 
     def build_and_save_index(self, index_path=INDEX_PATH, mapping_path=MAPPING_PATH):
-        """Tạo embedding, xây dựng index FAISS và lưu trữ."""
         mongo_ids, texts_to_embed  = self._fetch_data()
 
         if not texts_to_embed:
@@ -134,19 +118,16 @@ class VectorStoreService:
             logging.info(f"Đã tạo xong {embeddings.shape[0]} embeddings với kích thước {embeddings.shape[1]}.")
         except Exception as e:
             logging.error(f"Lỗi trong quá trình tạo embedding: {e}")
-            return # Hoặc raise lỗi
+            return 
 
         logging.info(f"Đang xây dựng FAISS index (IndexFlatL2)...")
         try:
             index = faiss.IndexFlatL2(self.embedding_dim)
-            # Kiểm tra nếu embeddings không rỗng trước khi thêm
             if embeddings.shape[0] > 0:
                  index.add(embeddings)
                  logging.info(f"Đã thêm {index.ntotal} vector vào index FAISS.")
             else:
                  logging.warning("Không có embeddings nào được tạo để thêm vào index.")
-                 # Vẫn có thể lưu index rỗng nếu muốn
-                 # return
 
             logging.info(f"Đang lưu index FAISS vào: {index_path}")
             faiss.write_index(index, index_path)
@@ -160,12 +141,11 @@ class VectorStoreService:
 
         except faiss.FaissException as e:
              logging.error(f"Lỗi FAISS: {e}")
-             # Có thể cần xử lý cụ thể hơn tùy vào lỗi FAISS
         except IOError as e:
              logging.error(f"Lỗi I/O khi lưu file index/mapping: {e}")
         except Exception as e:
             logging.error(f"Lỗi không mong muốn khi xây dựng/lưu index: {e}")
-            return # Hoặc raise
+            return
 
         logging.info("Hoàn tất quá trình xây dựng và lưu trữ vector store.")
 
@@ -176,21 +156,17 @@ class VectorStoreService:
             self.client.close()
             logging.info("Đã đóng kết nối MongoDB.")
 
-# --- Chạy trực tiếp để tạo index ---
 if __name__ == "__main__":
     logging.info("Bắt đầu quá trình tạo Vector Store...")
-    service = None # Khởi tạo service là None để đảm bảo có thể gọi close_connection trong finally
+    service = None
     try:
-        # Việc xác định MONGODB_URI và FINAL_DB_NAME đã được thực hiện ở trên
-        # Nếu có lỗi cấu hình, ValueError đã được raise
-        service = VectorStoreService() # Sử dụng cấu hình toàn cục đã xử lý
+        service = VectorStoreService() 
         service.build_and_save_index()
         logging.info("Vector Store đã được tạo/cập nhật thành công.")
-    except (ConnectionError, ValueError, TypeError) as e: # Bắt thêm TypeError nếu có lỗi phân tích URI
+    except (ConnectionError, ValueError, TypeError) as e: 
         logging.error(f"Lỗi cấu hình, kết nối hoặc dữ liệu: {e}")
     except Exception as e:
         logging.error(f"Đã xảy ra lỗi không mong muốn trong quá trình chính: {e}", exc_info=True)
     finally:
-        # Đảm bảo kết nối được đóng ngay cả khi có lỗi
         if service:
             service.close_connection()

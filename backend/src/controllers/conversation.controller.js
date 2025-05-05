@@ -56,9 +56,9 @@ export const handleNewMessage = async (req, res) => {
     console.error("[Controller] Lỗi khi xử lý tin nhắn:", error.message);
 
     if (error.message.startsWith("Lỗi từ Python Service:") || error.message.startsWith("Không thể kết nối")) {
-       res.status(503).json({ error: `Không thể nhận câu trả lời từ dịch vụ AI: ${error.message}` }); // 503 Service Unavailable
+       res.status(503).json({ error: `Không thể nhận câu trả lời từ dịch vụ AI: ${error.message}` })
     } else if (error.message.startsWith("Phản hồi không hợp lệ")) {
-        res.status(502).json({ error: `Dịch vụ AI trả về phản hồi không mong muốn.` }); // 502 Bad Gateway
+        res.status(502).json({ error: `Dịch vụ AI trả về phản hồi không mong muốn.` }); 
     }
     else {
        res.status(500).json({ error: "Lỗi máy chủ nội bộ khi xử lý yêu cầu." });
