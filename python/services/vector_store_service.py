@@ -92,35 +92,44 @@ class VectorStoreService:
             raise ValueError(f"Không thể tải model embedding '{model_name}': {e}")
 
     def _fetch_data(self):
-        """Lấy dữ liệu từ MongoDB."""
-        logging.info(f"Đang lấy dữ liệu từ collection '{self.collection_name}' trong DB '{self.db_name}'...")
+        logging.info(f"Đang lấy dữ liệu từ collection '{self.collection_name}'...")
         try:
-            documents = list(self.collection.find({}, {"_id": 1, "description": 1}))
+            # Lấy cả Description và Doctor
+            documents = list(self.collection.find({}, {"_id": 1, "Description": 1, "Doctor": 1}))
             if not documents:
-                logging.warning("Không tìm thấy tài liệu nào trong collection.")
+                logging.warning("Không tìm thấy tài liệu nào.")
                 return [], []
 
             ids = [str(doc["_id"]) for doc in documents]
-            texts = [doc.get("description", "") for doc in documents]
-            logging.info(f"Đã lấy được {len(documents)} tài liệu.")
-            return ids, texts
+            texts_to_embed = []
+            for doc in documents:
+                # Lấy nội dung, dùng chuỗi rỗng nếu thiếu
+                question = doc.get("Description", "")
+                answer = doc.get("Doctor", "")
+                # Kết hợp thành một chuỗi duy nhất để embed
+                # Bạn có thể thử nghiệm cách kết hợp khác nhau
+                combined_text = f"Câu hỏi: {question}\nTrả lời: {answer}"
+                # Hoặc chỉ embed câu trả lời:
+                # combined_text = answer if answer else question # Ưu tiên trả lời, nếu không có thì dùng câu hỏi
+                texts_to_embed.append(combined_text)
+
+            logging.info(f"Đã chuẩn bị {len(texts_to_embed)} đoạn text để embed.")
+            return ids, texts_to_embed # Trả về list các đoạn text đã kết hợp
         except Exception as e:
-            logging.error(f"Lỗi khi truy vấn dữ liệu từ MongoDB: {e}")
-            # Bạn có thể muốn raise lỗi ở đây thay vì trả về list rỗng
-            # raise RuntimeError(f"Lỗi truy vấn MongoDB: {e}")
-            return [], [] # Hoặc trả về rỗng để xử lý ở nơi gọi
+            logging.error(f"Lỗi khi truy vấn hoặc chuẩn bị dữ liệu MongoDB: {e}")
+            return [], []
 
     def build_and_save_index(self, index_path=INDEX_PATH, mapping_path=MAPPING_PATH):
         """Tạo embedding, xây dựng index FAISS và lưu trữ."""
-        mongo_ids, descriptions = self._fetch_data()
+        mongo_ids, texts_to_embed  = self._fetch_data()
 
-        if not descriptions:
+        if not texts_to_embed:
             logging.warning("Không có dữ liệu để tạo index. Bỏ qua.")
             return
 
-        logging.info(f"Đang tạo embeddings cho {len(descriptions)} mô tả...")
+        logging.info(f"Đang tạo embeddings cho {len(texts_to_embed)} mô tả...")
         try:
-            embeddings = self.model.encode(descriptions, show_progress_bar=True, convert_to_numpy=True)
+            embeddings = self.model.encode(texts_to_embed, show_progress_bar=True, convert_to_numpy=True)
             embeddings = embeddings.astype('float32')
             logging.info(f"Đã tạo xong {embeddings.shape[0]} embeddings với kích thước {embeddings.shape[1]}.")
         except Exception as e:

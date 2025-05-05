@@ -154,40 +154,70 @@ class RetrieverService:
             results = []
             # indices[0] chứa list các index của vector gần nhất trong FAISS
             # distances[0] chứa list các khoảng cách tương ứng
+            logging.info(f"FAISS indices tìm thấy: {indices[0]}")
+            
             for i, idx in enumerate(indices[0]):
+                mongo_id = None # Khởi tạo mongo_id là None
                 if idx != -1: # FAISS trả về -1 nếu không tìm đủ top_k kết quả
                     mongo_id = self.id_mapping.get(idx) # Lấy MongoDB ID từ mapping
-                    score = 1.0 - distances[0][i] # Chuyển distance thành score (giả sử L2, cần chuẩn hóa nếu cần)
-                                                # Hoặc có thể dùng distance trực tiếp tùy ý nghĩa
+                    score = 1.0 - distances[0][i]
+
+                    # --- THÊM LOG CHI TIẾT ---
+                    logging.info(f"Đang xử lý kết quả {i+1}: FAISS Index={idx}, Score={score:.4f}")
                     if mongo_id:
-                        result_item = {'id': mongo_id, 'score': float(score)} # Chuyển score sang float
+                        logging.info(f"  -> MongoDB ID tương ứng (từ mapping): {mongo_id}")
+                        result_item = {'id': mongo_id, 'score': float(score)}
 
                         # Nếu yêu cầu fetch context và có kết nối DB
                         if fetch_context and self.collection is not None:
+                            logging.info(f"  -> Đang tìm kiếm document _id='{mongo_id}' trong MongoDB...")
+                            doc = None # Khởi tạo doc là None
                             try:
                                 # Tìm document trong MongoDB bằng _id
-                                # Chuyển string id thành ObjectId
-                                doc = self.collection.find_one({"_id": ObjectId(mongo_id)}, {"description": 1})
+                                # Đảm bảo chuyển string id thành ObjectId
+                                doc = self.collection.find_one({"_id": ObjectId(mongo_id)}, {"Description": 1, "Doctor": 1})
+                                
                                 if doc:
-                                    result_item['context'] = doc.get('description', '')
-                                else:
-                                     logging.warning(f"Không tìm thấy document với _id={mongo_id} trong DB.")
-                                     result_item['context'] = None # Hoặc bỏ qua kết quả này?
-                            except Exception as e:
-                                logging.error(f"Lỗi khi fetch context cho _id={mongo_id}: {e}")
-                                result_item['context'] = None # Ghi nhận lỗi nhưng vẫn trả về ID
+                                    logging.info(f"  -> Tìm thấy document!")
+                                    # Lấy câu trả lời của bác sĩ làm context chính
+                                    doctor_answer = doc.get('Doctor')
+                                    question = doc.get('Description') # Có thể lấy thêm câu hỏi nếu muốn
 
+                                    if doctor_answer:
+                                        logging.info(f"    -> Lấy 'Doctor' làm context: {doctor_answer[:100]}...")
+                                        # Chọn nội dung làm context: chỉ câu trả lời hoặc kết hợp
+                                        # result_item['context'] = f"Câu hỏi: {question}\nTrả lời: {doctor_answer}"
+                                        result_item['context'] = doctor_answer # Chỉ lấy câu trả lời làm context
+                                    elif question: # Nếu không có trả lời, dùng tạm câu hỏi làm context
+                                        logging.warning(f"    -> Không có 'Doctor', dùng 'Description' làm context: {question[:100]}...")
+                                        result_item['context'] = question
+                                    else:
+                                        logging.warning(f"    -> KHÔNG tìm thấy cả 'Doctor' và 'Description'!")
+                                        result_item['context'] = None
+                                
+                            except Exception as e:
+                                logging.error(f"  -> Lỗi khi truy vấn MongoDB cho _id={mongo_id}: {e}", exc_info=True) # Thêm exc_info
+                                result_item['context'] = None
+
+                        # Chỉ thêm vào results nếu có mongo_id
+                        # Có thể thêm điều kiện chỉ thêm nếu có context nếu muốn
                         results.append(result_item)
                     else:
-                         logging.warning(f"Không tìm thấy MongoDB ID cho index {idx} trong mapping.")
+                         logging.warning(f"  -> Không tìm thấy MongoDB ID cho FAISS index {idx} trong mapping.")
+                         # Bỏ qua kết quả này nếu không có ID
+                else:
+                    logging.info(f"Đang xử lý kết quả {i+1}: FAISS Index={idx} (Không hợp lệ, bỏ qua).")
+            # --- KẾT THÚC LOG CHI TIẾT ---
 
-            logging.info(f"Tìm thấy {len(results)} kết quả liên quan.")
-            # Sắp xếp lại theo score giảm dần (nếu cần, vì FAISS thường trả về đã sắp xếp)
-            # results.sort(key=lambda x: x['score'], reverse=True)
-            return results
-        
-        except Exception as e:
-            logging.error(f"Lỗi khi tìm kiếm trong FAISS index hoặc xử lý kết quả: {e}")
+            logging.info(f"Tổng số kết quả hợp lệ được xử lý (trước khi lọc context): {len(results)}")
+            # Lọc lại lần cuối trước khi trả về (nếu cần)
+            # final_results = [r for r in results if r.get('context')] # Chỉ trả về nếu có context
+            # logging.info(f"Tổng số kết quả có context: {len(final_results)}")
+            # return final_results
+            return results # Trả về tất cả kết quả có ID, việc lọc context đã được log ở api_server
+
+        except Exception as e: # Bắt lỗi chung hơn
+            logging.error(f"Lỗi khi tìm kiếm trong FAISS index hoặc xử lý kết quả: {e}", exc_info=True)
             return []
 
     def close_connection(self):
