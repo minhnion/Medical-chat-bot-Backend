@@ -14,7 +14,7 @@ dotenv_path = os.path.join(os.path.dirname(__file__), '..', '..', 'backend/.env'
 if not os.path.exists(dotenv_path):
     logging.error(f".env file not found at expected path: {dotenv_path}")
 
-load_dotenv(dotenv_path=dotenv_path, verbose=True) # verbose=True để xem log load dotenv
+load_dotenv(dotenv_path=dotenv_path, verbose=True) 
 
 # config
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -47,23 +47,17 @@ class GeneratorService:
                 logging.error(f"Lỗi khi cấu hình Google Generative AI hoặc khởi tạo model '{self.model_name}': {e}", exc_info=True) # Thêm exc_info để xem traceback
                 self.model = None
                 self.api_key_configured = False
+    
+    def _create_prompt(self, query: str, context: list, context_threshold: float = 0.8) -> str:
 
-    def _create_prompt(self, query: str, context: list) -> str:
+        prompt = query
         if not context:
-            logging.warning("Không có context được cung cấp cho prompt.")
-            context_str = "Không có thông tin bổ sung nào được cung cấp."
+            logging.warning("Không có context được cung cấp cho prompt. Sử dụng trực tiếp câu hỏi người dùng.")
         else:
             context_items = [f"Thông tin {i+1}: {ctx}" for i, ctx in enumerate(context)]
             context_str = "\n\n".join(context_items)
+            prompt = f"""**Câu hỏi:** {query}\n**Thông tin tham khảo:**\n\n{context_str}\n\n"""
 
-        prompt = f"""**Thông tin tham khảo:**
-
-{context_str}
-
-
-**Câu hỏi:** {query}
-
-"""
         logging.debug(f"Prompt được tạo (độ dài: {len(prompt)} chars)")
         return prompt
 

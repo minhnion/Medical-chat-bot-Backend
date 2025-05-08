@@ -106,7 +106,7 @@ class RetrieverService:
              logging.warning("Thiếu MONGO_URI hoặc DB_NAME, sẽ không fetch context từ MongoDB.")
 
 
-    def retrieve(self, query: str, top_k: int = 5, fetch_context: bool = True) -> list:
+    def retrieve(self, query: str, top_k: int = 5, fetch_context: bool = True, threshold: float = 0.5) -> list:
         if not query:
             logging.warning("Query rỗng, không thực hiện tìm kiếm.")
             return []
@@ -114,12 +114,12 @@ class RetrieverService:
             logging.warning("Index FAISS rỗng, không có gì để tìm kiếm.")
             return []
 
-        logging.info(f"Đang tạo embedding cho query: '{query[:50]}...'") # Log 50 ký tự đầu
+        logging.info(f"Đang tạo embedding cho query: '{query[:50]}...'")  # Log 50 ký tự đầu
         try:
             query_embedding = self.model.encode([query], convert_to_numpy=True).astype('float32')
         except Exception as e:
-             logging.error(f"Lỗi khi tạo embedding cho query: {e}")
-             return [] 
+            logging.error(f"Lỗi khi tạo embedding cho query: {e}")
+            return []
 
         logging.info(f"Đang tìm kiếm {top_k} kết quả gần nhất trong FAISS index...")
         try:
@@ -127,56 +127,61 @@ class RetrieverService:
 
             results = []
             logging.info(f"FAISS indices tìm thấy: {indices[0]}")
-            
+
             for i, idx in enumerate(indices[0]):
-                mongo_id = None 
-                if idx != -1:
-                    mongo_id = self.id_mapping.get(idx) 
-                    score = 1.0 - distances[0][i]
-
-                    logging.info(f"Đang xử lý kết quả {i+1}: FAISS Index={idx}, Score={score:.4f}")
-                    if mongo_id:
-                        logging.info(f"  -> MongoDB ID tương ứng (từ mapping): {mongo_id}")
-                        result_item = {'id': mongo_id, 'score': float(score)}
-
-                        if fetch_context and self.collection is not None:
-                            logging.info(f"  -> Đang tìm kiếm document _id='{mongo_id}' trong MongoDB...")
-                            doc = None 
-                            try:
-                                doc = self.collection.find_one({"_id": ObjectId(mongo_id)}, {"Description": 1, "Doctor": 1})
-                                
-                                if doc:
-                                    logging.info(f"  -> Tìm thấy document!")
-                                    doctor_answer = doc.get('Doctor')
-                                    question = doc.get('Description') 
-
-                                    if doctor_answer:
-                                        logging.info(f"    -> Lấy 'Doctor' làm context: {doctor_answer[:100]}...")
-                                        result_item['context'] = doctor_answer 
-                                    elif question: 
-                                        logging.warning(f"    -> Không có 'Doctor', dùng 'Description' làm context: {question[:100]}...")
-                                        result_item['context'] = question
-                                    else:
-                                        logging.warning(f"    -> KHÔNG tìm thấy cả 'Doctor' và 'Description'!")
-                                        result_item['context'] = None
-                                
-                            except Exception as e:
-                                logging.error(f"  -> Lỗi khi truy vấn MongoDB cho _id={mongo_id}: {e}", exc_info=True) # Thêm exc_info
-                                result_item['context'] = None
-
-                        results.append(result_item)
-                    else:
-                         logging.warning(f"  -> Không tìm thấy MongoDB ID cho FAISS index {idx} trong mapping.")
-                else:
+                if idx == -1:
                     logging.info(f"Đang xử lý kết quả {i+1}: FAISS Index={idx} (Không hợp lệ, bỏ qua).")
+                    continue
 
-            logging.info(f"Tổng số kết quả hợp lệ được xử lý (trước khi lọc context): {len(results)}")
-            return results 
+                mongo_id = self.id_mapping.get(idx)
+                score = 1.0 - distances[0][i]  # Tính điểm tương đồng
 
-        except Exception as e: 
+                if score < threshold:  # Bỏ qua các kết quả không đạt ngưỡng
+                    logging.info(f"Kết quả {i+1} bị loại vì score={score:.4f} < threshold={threshold:.4f}.")
+                    continue
+
+                logging.info(f"Đang xử lý kết quả {i+1}: FAISS Index={idx}, Score={score:.4f}")
+                if not mongo_id:
+                    logging.warning(f"  -> Không tìm thấy MongoDB ID cho FAISS index {idx} trong mapping.")
+                    continue
+
+                result_item = {'id': mongo_id, 'score': float(score)}
+
+                if fetch_context and self.collection is not None:
+                    try:
+                        logging.info(f"  -> Đang tìm kiếm document _id='{mongo_id}' trong MongoDB...")
+                        doc = self.collection.find_one({"_id": ObjectId(mongo_id)}, {"Description": 1, "Doctor": 1})
+
+                        if doc:
+                            logging.info(f"  -> Tìm thấy document!")
+                            doctor_answer = doc.get('Doctor')
+                            question = doc.get('Description')
+
+                            if doctor_answer:
+                                logging.info(f"    -> Lấy 'Doctor' làm context: {doctor_answer[:100]}...")
+                                result_item['context'] = doctor_answer
+                            elif question:
+                                logging.warning(f"    -> Không có 'Doctor', dùng 'Description' làm context: {question[:100]}...")
+                                result_item['context'] = question
+                            else:
+                                logging.warning(f"    -> KHÔNG tìm thấy cả 'Doctor' và 'Description'!")
+                                result_item['context'] = None
+                        else:
+                            logging.warning(f"  -> Không tìm thấy document trong MongoDB cho _id='{mongo_id}'.")
+                            result_item['context'] = None
+                    except Exception as e:
+                        logging.error(f"  -> Lỗi khi truy vấn MongoDB cho _id={mongo_id}: {e}", exc_info=True)
+                        result_item['context'] = None
+
+                results.append(result_item)
+
+            logging.info(f"Tổng số kết quả hợp lệ được xử lý (sau khi lọc theo threshold): {len(results)}")
+            return results
+
+        except Exception as e:
             logging.error(f"Lỗi khi tìm kiếm trong FAISS index hoặc xử lý kết quả: {e}", exc_info=True)
             return []
-
+    
     def close_connection(self):
         """Đóng kết nối MongoDB nếu có."""
         if self.client:
@@ -190,7 +195,7 @@ if __name__ == "__main__":
     try:
         retriever = RetrieverService()
 
-        test_query = "Triệu chứng đau đầu và sốt nhẹ là bệnh gì?"
+        test_query = "Q. What should I do to reduce my weight gained due to genetic hypothyroidism?"
         print(f"\n--- Thử tìm kiếm cho query: '{test_query}' ---")
 
         results_with_context = retriever.retrieve(test_query, top_k=3, fetch_context=True)
