@@ -1,34 +1,61 @@
-import { PythonShell } from "python-shell";
-import path from "path";
+import axios from 'axios';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-//gọi embedder
-export function embedAndIndex(id, text) {
-  const options = {
-    mode: "text",
-    pythonPath: process.env.PYTHON_CMD || "python",
-    scriptPath: path.resolve(process.cwd(), process.env.PYTHON_SERVICE_PATH),
-    args: ["--id", id, "--text", text, "--index", process.env.FAISS_INDEX_PATH],
-  };
-  return new Promise((res, rej) => {
-    PythonShell.run("embedder.py", options, (err, results) => {
-      if (err) return rej(err);
-      res(JSON.parse(results[0]));
-    });
-  });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '..', '..', '.env') });
+
+const PYTHON_API_BASE_URL = process.env.PYTHON_API_URL;
+
+if (!PYTHON_API_BASE_URL) {
+  console.error("Lỗi: Biến môi trường PYTHON_API_URL chưa được đặt!");
+
 }
 
-//gọi retriever (chat)
-export function retrieveAnswer(question) {
-  const options = {
-    mode: "text",
-    pythonPath: process.env.PYTHON_CMD || "python",
-    scriptPath: path.resolve(process.cwd(), process.env.PYTHON_SERVICE_PATH),
-    args: ["--question", question, "--index", process.env.FAISS_INDEX_PATH, "--topk", "5"],
-  };
-  return new Promise((res, rej) => {
-    PythonShell.run("retriever.py", options, (err, results) => {
-      if (err) return rej(err);
-      res(JSON.parse(results[0]));  
+const getRagResponse = async (query) => {
+  if (!PYTHON_API_BASE_URL) {
+     throw new Error("Python API URL is not configured.");
+  }
+  console.log(`[PythonService] Gửi query tới ${PYTHON_API_BASE_URL}/chat: "${query}"`);
+  try {
+    const response = await axios.post(`${PYTHON_API_BASE_URL}/chat`, {
+      query: query, 
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+       timeout: 60000 
     });
-  });
-}
+
+    if (response.data && response.data.answer) {
+      console.log("[PythonService] Nhận được answer:", response.data.answer.substring(0, 100) + "..."); // Log phần đầu
+      return response.data.answer;
+    } else if (response.data && response.data.error) {
+       console.error("[PythonService] Python API trả về lỗi:", response.data.error);
+       throw new Error(`Lỗi từ Python Service: ${response.data.error}`);
+    } else {
+      console.error("[PythonService] Phản hồi không hợp lệ từ Python API:", response.data);
+      throw new Error("Phản hồi không hợp lệ từ dịch vụ Python.");
+    }
+  } catch (error) {
+    console.error("[PythonService] Lỗi khi gọi Python API:", error.message);
+    if (error.response) {
+      console.error(`[PythonService] Lỗi từ server Python (${error.response.status}):`, error.response.data);
+      const pythonErrorMsg = error.response.data?.error || `Lỗi ${error.response.status} từ server Python`;
+      throw new Error(`Lỗi từ Python Service: ${pythonErrorMsg}`);
+    } else if (error.request) {
+      console.error("[PythonService] Không nhận được phản hồi từ server Python.");
+      throw new Error("Không thể kết nối đến dịch vụ Python.");
+    } else {
+      console.error("[PythonService] Lỗi thiết lập yêu cầu:", error.message);
+      throw new Error("Lỗi khi chuẩn bị yêu cầu đến dịch vụ Python.");
+    }
+  }
+};
+
+export const pythonService = {
+  getRagResponse,
+};
+

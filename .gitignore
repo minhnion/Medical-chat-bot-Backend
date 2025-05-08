@@ -14,5 +14,4 @@ python/notebooks/*.ipynb_checkpoints/
 python/services/__pycache__/
 
 # FAISS index files
-indexes/
-*.idx
+python/vector_store
