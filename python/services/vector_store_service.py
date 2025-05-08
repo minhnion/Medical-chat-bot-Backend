@@ -85,7 +85,7 @@ class VectorStoreService:
     def _fetch_data(self):
         logging.info(f"Đang lấy dữ liệu từ collection '{self.collection_name}'...")
         try:
-            documents = list(self.collection.find({}, {"_id": 1, "Description": 1, "Doctor": 1}))
+            documents = list(self.collection.find({}, {"_id": 1, "Description": 1}))
             if not documents:
                 logging.warning("Không tìm thấy tài liệu nào.")
                 return [], []
@@ -94,9 +94,9 @@ class VectorStoreService:
             texts_to_embed = []
             for doc in documents:
                 question = doc.get("Description", "")
-                answer = doc.get("Doctor", "")
-                combined_text = f"Câu hỏi: {question}\nTrả lời: {answer}"
-                texts_to_embed.append(combined_text)
+                # answer = doc.get("Doctor", "")
+                # combined_text = f"Câu hỏi: {question}\nTrả lời: {answer}"
+                texts_to_embed.append(question)
 
             logging.info(f"Đã chuẩn bị {len(texts_to_embed)} đoạn text để embed.")
             return ids, texts_to_embed 
